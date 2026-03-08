@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WalkLog</title>
+    
+    <!-- PWA / ホーム画面追加用メタタグ -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="https://upload.wikimedia.org/wikipedia/commons/thumb/e/e6/Noto_Emoji_KitKat_1f463.svg/512px-Noto_Emoji_KitKat_1f463.svg.png">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Leaflet (地図ライブラリ) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        /* レイアウト・マップ用スタイル */
+        body { overscroll-behavior-y: none; }
+        #map { flex-grow: 1; height: 100%; width: 100%; z-index: 0; }
+        .view-section { display: none; flex-direction: column; height: 100%; }
+        .view-section.active { display: flex; }
+        #map-wrapper { flex-grow: 1; position: relative; display: flex; flex-direction: column; }
+        .pb-safe { padding-bottom: env(safe-area-inset-bottom); }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans text-gray-800 flex flex-col h-screen overflow-hidden">
+
+    <!-- ヘッダー -->
+    <header class="bg-teal-600 text-white p-4 shadow-md flex items-center justify-between z-10 shrink-0">
+        <h1 class="text-xl font-bold flex items-center gap-2">
+            <i data-lucide="footprints"></i>
+            WalkLog
+        </h1>
+        <div id="statusIndicator" class="text-xs px-2 py-1 bg-teal-800 rounded-full flex items-center gap-1 shadow-inner">
+            <div class="w-2 h-2 rounded-full bg-red-400" id="gpsStatusDot"></div>
+            <span id="gpsStatusText">GPS待機中</span>
+        </div>
+    </header>
+
+    <!-- メインコンテンツ領域 -->
+    <main class="flex-grow relative overflow-hidden">
+        
+        <!-- ビュー1：レコーダー（マップ） -->
+        <div id="view-recorder" class="view-section active absolute inset-0">
+            <!-- ダッシュボード (記録表示) -->
+            <div class="bg-white p-4 shadow-sm grid grid-cols-4 gap-2 z-10 shrink-0">
+                <div class="text-center">
+                    <p class="text-[10px] text-gray-500 mb-1">距離</p>
+                    <p class="text-lg font-bold text-teal-700 leading-tight"><span id="distanceValue">0.00</span><span class="text-[10px] font-normal ml-0.5">km</span></p>
+                </div>
+                <div class="text-center border-l border-gray-100">
+                    <p class="text-[10px] text-gray-500 mb-1">時間</p>
+                    <p class="text-lg font-bold text-teal-700 leading-tight"><span id="timeValue">00:00</span></p>
+                </div>
+                <div class="text-center border-l border-gray-100">
+                    <p class="text-[10px] text-gray-500 mb-1">歩数</p>
+                    <p class="text-lg font-bold text-teal-700 leading-tight"><span id="stepsValue">0</span></p>
+                </div>
+                <div class="text-center border-l border-gray-100">
+                    <p class="text-[10px] text-gray-500 mb-1">カロリー</p>
+                    <p class="text-lg font-bold text-teal-700 leading-tight"><span id="calorieValue">0</span><span class="text-[10px] font-normal ml-0.5">kcal</span></p>
+                </div>
+            </div>
+
+            <!-- 地図エリア -->
+            <div id="map-wrapper">
+                <div id="map"></div>
+            </div>
+
+            <!-- コントロールパネル -->
+            <div class="bg-white p-4 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.1)] z-10 shrink-0 flex gap-2">
+                <button id="addPinBtn" class="bg-amber-500 hover:bg-amber-600 text-white p-4 rounded-xl shadow-lg transition-colors flex justify-center items-center disabled:opacity-50 disabled:cursor-not-allowed" disabled title="現在地にピンを立てる">
+                    <i data-lucide="map-pin"></i>
+                </button>
+                <button id="toggleBtn" class="flex-grow bg-teal-600 hover:bg-teal-700 text-white font-bold py-4 rounded-xl shadow-lg transition-colors flex justify-center items-center gap-2 text-lg">
+                    <i data-lucide="play" id="btnIconPlay"></i>
+                    <i data-lucide="square" id="btnIconStop" class="hidden"></i>
+                    <span id="btnText">スタート</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- ビュー2：履歴 -->
+        <div id="view-history" class="view-section absolute inset-0 bg-gray-50 p-4 overflow-y-auto" style="display: none;">
+            <h2 class="text-lg font-bold text-gray-700 mb-4 border-b pb-2 flex items-center gap-2">
+                <i data-lucide="history"></i> ウォーキング履歴
+            </h2>
+            <div id="historyList" class="space-y-3 pb-20">
+                <!-- 履歴アイテムがここに挿入されます -->
+            </div>
+        </div>
+
+        <!-- ビュー3：設定 -->
+        <div id="view-settings" class="view-section absolute inset-0 bg-gray-50 p-4 overflow-y-auto" style="display: none;">
+            <h2 class="text-lg font-bold text-gray-700 mb-4 border-b pb-2 flex items-center gap-2">
+                <i data-lucide="settings"></i> 設定
+            </h2>
+            
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-4">
+                <h3 class="font-bold text-gray-600 mb-3 border-b pb-1">プロフィール設定</h3>
+                <p class="text-xs text-gray-500 mb-4">歩幅と消費カロリーをより正確に計算するために入力してください。</p>
+                
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-600 mb-1">性別</label>
+                        <select id="settingGender" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-gray-50">
+                            <option value="male">男性</option>
+                            <option value="female">女性</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-600 mb-1">年齢層</label>
+                        <select id="settingAge" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-gray-50">
+                            <option value="10">10代</option><option value="20">20代</option><option value="30">30代</option>
+                            <option value="40">40代</option><option value="50">50代</option><option value="60">60代以上</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-600 mb-1">身長 (cm)</label>
+                        <input type="number" id="settingHeight" placeholder="170" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-gray-50">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-600 mb-1">体重 (kg)</label>
+                        <input type="number" id="settingWeight" placeholder="60" class="w-full border border-gray-300 rounded-lg p-2 text-sm bg-gray-50">
+                    </div>
+                </div>
+                <button onclick="saveSettings()" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-2.5 rounded-lg transition-colors text-sm">
+                    設定を保存
+                </button>
+            </div>
+
+            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mb-20">
+                <h3 class="font-bold text-gray-600 mb-3 border-b pb-1">データ管理</h3>
+                <p class="text-[10px] text-gray-500 mb-3">万が一に備え、履歴データのバックアップと復元が可能です。</p>
+                <div class="flex flex-col gap-2">
+                    <button onclick="exportData()" class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-2 rounded-lg transition-colors flex justify-center items-center gap-2 text-sm border border-gray-200">
+                        <i data-lucide="download" class="w-4 h-4"></i> バックアップを保存 (.json)
+                    </button>
+                    <label class="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-2 rounded-lg transition-colors flex justify-center items-center gap-2 text-sm border border-gray-200 cursor-pointer">
+                        <i data-lucide="upload" class="w-4 h-4"></i> バックアップを復元
+                        <input type="file" id="importFile" class="hidden" accept=".json" onchange="importData(event)">
+                    </label>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 初回設定モーダル -->
+    <div id="setupModal" class="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm" style="display: none;">
+        <div class="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl">
+            <h2 class="text-xl font-bold text-teal-700 mb-2 text-center">プロフィール設定</h2>
+            <p class="text-xs text-gray-500 mb-6 text-center">正確な歩幅と消費カロリーを計算するため、<br>情報を入力してください。</p>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">性別</label>
+                    <div class="flex gap-2">
+                        <button type="button" class="gender-btn flex-1 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 text-sm transition-colors" data-value="male">男性</button>
+                        <button type="button" class="gender-btn flex-1 py-2 border border-gray-300 rounded-lg bg-gray-50 text-gray-600 text-sm transition-colors" data-value="female">女性</button>
+                    </div>
+                    <input type="hidden" id="initGender" value="">
+                </div>
+                
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 mb-1">年齢層</label>
+                    <select id="initAge" class="w-full border border-gray-300 rounded-lg p-2.5 bg-gray-50 text-sm">
+                        <option value="" disabled selected>選択してください</option>
+                        <option value="10">10代</option><option value="20">20代</option><option value="30">30代</option>
+                        <option value="40">40代</option><option value="50">50代</option><option value="60">60代以上</option>
+                    </select>
+                </div>
+
+                <div class="flex gap-4">
+                    <div class="flex-1">
+                        <label class="block text-xs font-bold text-gray-600 mb-1">身長 (cm)</label>
+                        <input type="number" id="initHeight" placeholder="例: 170" class="w-full border border-gray-300 rounded-lg p-2.5 bg-gray-50 text-sm">
+                    </div>
+                    <div class="flex-1">
+                        <label class="block text-xs font-bold text-gray-600 mb-1">体重 (kg)</label>
+                        <input type="number" id="initWeight" placeholder="例: 65" class="w-full border border-gray-300 rounded-lg p-2.5 bg-gray-50 text-sm">
+                    </div>
+                </div>
+            </div>
+            
+            <button onclick="completeSetup()" class="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3 rounded-xl shadow mt-8 transition-colors">
+                はじめる
+            </button>
+        </div>
+    </div>
+
+    <!-- ボトムナビゲーション -->
+    <nav class="bg-white border-t border-gray-200 flex justify-around p-2 z-20 shrink-0 pb-safe">
+        <button onclick="switchTab('recorder')" id="tab-recorder" class="flex flex-col items-center p-2 text-teal-600 transition-colors w-1/3">
+            <i data-lucide="map"></i>
+            <span class="text-[10px] mt-1 font-bold">マップ</span>
+        </button>
+        <button onclick="switchTab('history')" id="tab-history" class="flex flex-col items-center p-2 text-gray-400 hover:text-teal-600 transition-colors w-1/3">
+            <i data-lucide="list"></i>
+            <span class="text-[10px] mt-1 font-bold">履歴</span>
+        </button>
+        <button onclick="switchTab('settings')" id="tab-settings" class="flex flex-col items-center p-2 text-gray-400 hover:text-teal-600 transition-colors w-1/3">
+            <i data-lucide="settings"></i>
+            <span class="text-[10px] mt-1 font-bold">設定</span>
+        </button>
+    </nav>
+
+    <script>
+        // --- 初期化と定数 ---
+        lucide.createIcons();
+        const STORAGE_KEY = 'walklog_history_v2';
+        const PROFILE_KEY = 'walklog_profile_v2';
+        
+        // 状態変数
+        let isRecording = false;
+        let watchId = null;
+        let startTime = null;
+        let timerInterval = null;
+        let totalDistanceMeters = 0;
+        let positions = [];
+        let map, polyline, currentMarker;
+        let pins = [];
+        let currentPosition = null;
+        
+        // 音声フィードバック用状態
+        let lastSpokenDistanceKm = 0;
+        let lastLapTimeMs = 0;
+
+        // DOM要素
+        const ui = {
+            toggleBtn: document.getElementById('toggleBtn'),
+            addPinBtn: document.getElementById('addPinBtn'),
+            btnText: document.getElementById('btnText'),
+            btnIconPlay: document.getElementById('btnIconPlay'),
+            btnIconStop: document.getElementById('btnIconStop'),
+            dist: document.getElementById('distanceValue'),
+            time: document.getElementById('timeValue'),
+            steps: document.getElementById('stepsValue'),
+            cal: document.getElementById('calorieValue'),
+            gpsDot: document.getElementById('gpsStatusDot'),
+            gpsText: document.getElementById('gpsStatusText'),
+            historyList: document.getElementById('historyList'),
+            setupModal: document.getElementById('setupModal')
+        };
+
+        // --- プロフィール・計算ロジック ---
+        function getProfile() {
+            return JSON.parse(localStorage.getItem(PROFILE_KEY));
+        }
+
+        // 歩幅計算 (身長×0.45、不明時は性別・年齢から推測)
+        function calculateStride(profile) {
+            if (!profile) return 0.7; // 70cm
+            if (profile.height && profile.height > 100) return (profile.height * 0.45) / 100;
+            
+            let base = profile.gender === 'male' ? 0.75 : 0.70;
+            const age = parseInt(profile.age);
+            if (age >= 50 && age < 60) base -= 0.02;
+            if (age >= 60) base -= 0.04;
+            return base;
+        }
+
+        // カロリー計算 (METs法)
+        function calculateCalories(distanceKm, durationMs, profile) {
+            if (!profile || !profile.weight) return 0;
+            const hours = durationMs / (1000 * 60 * 60);
+            if (hours <= 0) return 0;
+            
+            const speedKmh = distanceKm / hours;
+            let mets = 3.0; // デフォルト: 散歩
+            
+            if (speedKmh >= 8.0) mets = 9.0;      // ランニング
+            else if (speedKmh >= 6.0) mets = 7.0; // ジョギング
+            else if (speedKmh >= 4.0) mets = 4.3; // 早歩き
+            
+            // 消費カロリー = METs × 体重(kg) × 運動時間(h) × 1.05
+            return Math.round(mets * parseFloat(profile.weight) * hours * 1.05);
+        }
+
+        // --- 音声フィードバック (Web Speech API) ---
+        function speak(text) {
+            if (!('speechSynthesis' in window)) return;
+            // 既存の発話をキャンセル
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = 'ja-JP';
+            utterance.rate = 1.1; // 少し早口
+            window.speechSynthesis.speak(utterance);
+        }
+
+        function checkAudioFeedback() {
+            const currentKm = Math.floor(totalDistanceMeters / 1000);
+            if (currentKm > lastSpokenDistanceKm && currentKm > 0) {
+                // ラップタイム計算
+                const now = new Date();
+                const lapDurationMs = (now - startTime) - lastLapTimeMs;
+                const lapMinutes = Math.floor(lapDurationMs / 60000);
+                const lapSeconds = Math.floor((lapDurationMs % 60000) / 1000);
+                
+                // ペース判定
+                const lapHours = lapDurationMs / 3600000;
+                const lapSpeedKmh = 1 / lapHours; // 1kmあたりの時速
+                const action = lapSpeedKmh >= 8.0 ? '走りました' : '歩きました';
+                
+                const message = `${currentKm}キロメートル地点です。この1キロは、${lapMinutes}分${lapSeconds}秒で${action}。`;
+                speak(message);
+                
+                lastSpokenDistanceKm = currentKm;
+                lastLapTimeMs = now - startTime;
+            }
+        }
+
+        // --- 地図とGPSロジック ---
+        function initMap() {
+            map = L.map('map').setView([35.6738, 139.6675], 15); // 笹塚付近
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap'
+            }).addTo(map);
+            polyline = L.polyline([], {color: '#0d9488', weight: 5, opacity: 0.8}).addTo(map);
+        }
+
+        function calcDist(lat1, lon1, lat2, lon2) {
+            const R = 6371e3;
+            const p1 = lat1 * Math.PI/180, p2 = lat2 * Math.PI/180;
+            const dp = (lat2-lat1) * Math.PI/180, dl = (lon2-lon1) * Math.PI/180;
+            const a = Math.sin(dp/2) * Math.sin(dp/2) + Math.cos(p1) * Math.cos(p2) * Math.sin(dl/2) * Math.sin(dl/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
+
+        function onPosUpdate(pos) {
+            if (pos.coords.accuracy > 50) return; // 精度低いものは弾く
+            
+            const lat = pos.coords.latitude, lng = pos.coords.longitude;
+            currentPosition = [lat, lng];
+            ui.addPinBtn.disabled = !isRecording;
+
+            if (!currentMarker) {
+                currentMarker = L.circleMarker(currentPosition, {
+                    radius: 7, fillColor: "#0ea5e9", color: "#fff", weight: 2, opacity: 1, fillOpacity: 0.9
+                }).addTo(map);
+                map.setView(currentPosition, 16);
+            } else {
+                currentMarker.setLatLng(currentPosition);
+            }
+
+            if (isRecording) {
+                if (positions.length > 0) {
+                    const last = positions[positions.length - 1];
+                    totalDistanceMeters += calcDist(last[0], last[1], lat, lng);
+                }
+                positions.push(currentPosition);
+                polyline.setLatLngs(positions);
+                
+                if (!map.getBounds().contains(currentPosition)) map.panTo(currentPosition);
+                updateDashboard();
+                checkAudioFeedback();
+            }
+        }
+
+        // --- UIと記録制御 ---
+        function updateDashboard() {
+            const distKm = totalDistanceMeters / 1000;
+            ui.dist.textContent = distKm.toFixed(2);
+            
+            const profile = getProfile();
+            const stride = calculateStride(profile);
+            ui.steps.textContent = Math.floor(totalDistanceMeters / stride).toLocaleString();
+            
+            if (startTime) {
+                const durationMs = new Date() - startTime;
+                ui.cal.textContent = calculateCalories(distKm, durationMs, profile);
+            }
+        }
+
+        function updateTimer() {
+            const diff = new Date() - startTime;
+            const m = Math.floor(diff / 60000).toString().padStart(2, '0');
+            const s = Math.floor((diff % 60000) / 1000).toString().padStart(2, '0');
+            ui.time.textContent = `${m}:${s}`;
+        }
+
+        ui.addPinBtn.addEventListener('click', () => {
+            if (!isRecording || !currentPosition) return;
+            const pin = L.marker(currentPosition, {
+                icon: L.divIcon({
+                    className: 'custom-pin',
+                    html: `<div class="bg-amber-500 w-4 h-4 rounded-full border-2 border-white shadow-md"></div>`,
+                    iconSize: [16, 16]
+                })
+            }).addTo(map);
+            pins.push(pin);
+        });
+
+        ui.toggleBtn.addEventListener('click', () => {
+            if (!isRecording) {
+                // iOS等でユーザーアクションをトリガーに音声合成を初期化（無音再生）
+                if ('speechSynthesis' in window) {
+                    const utterance = new SpeechSynthesisUtterance('');
+                    window.speechSynthesis.speak(utterance);
+                }
+
+                isRecording = true;
+                startTime = new Date();
+                positions = [];
+                totalDistanceMeters = 0;
+                lastSpokenDistanceKm = 0;
+                lastLapTimeMs = 0;
+                pins.forEach(p => map.removeLayer(p));
+                pins = [];
+                polyline.setLatLngs([]);
+                
+                updateDashboard();
+                timerInterval = setInterval(updateTimer, 1000);
+
+                ui.toggleBtn.classList.replace('bg-teal-600', 'bg-rose-500');
+                ui.toggleBtn.classList.replace('hover:bg-teal-700', 'hover:bg-rose-600');
+                ui.btnText.textContent = "ストップ";
+                ui.btnIconPlay.classList.add('hidden');
+                ui.btnIconStop.classList.remove('hidden');
+                speak("記録を開始します。");
+            } else {
+                isRecording = false;
+                clearInterval(timerInterval);
+                ui.addPinBtn.disabled = true;
+                
+                ui.toggleBtn.classList.replace('bg-rose-500', 'bg-teal-600');
+                ui.toggleBtn.classList.replace('hover:bg-rose-600', 'hover:bg-teal-700');
+                ui.btnText.textContent = "スタート";
+                ui.btnIconStop.classList.add('hidden');
+                ui.btnIconPlay.classList.remove('hidden');
+
+                saveRecord();
+                renderHistory();
+                speak("記録を終了し、保存しました。お疲れ様でした。");
+            }
+        });
+
+        // --- データ保存・表示 ---
+        function saveRecord() {
+            const records = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            const profile = getProfile();
+            const now = new Date();
+            const distKm = totalDistanceMeters / 1000;
+            const durationMs = now - startTime;
+            
+            const hours = durationMs / 3600000;
+            const speedKmh = hours > 0 ? distKm / hours : 0;
+            const type = speedKmh >= 8.0 ? 'running' : 'walking';
+            
+            records.unshift({
+                id: Date.now(),
+                date: `${now.getFullYear()}年${(now.getMonth()+1).toString().padStart(2,'0')}月${now.getDate().toString().padStart(2,'0')}日`,
+                timeRange: `${startTime.getHours().toString().padStart(2,'0')}:${startTime.getMinutes().toString().padStart(2,'0')} 〜 ${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}`,
+                distance: distKm.toFixed(2),
+                duration: ui.time.textContent,
+                steps: Math.floor(totalDistanceMeters / calculateStride(profile)),
+                calories: calculateCalories(distKm, durationMs, profile),
+                pins: pins.length,
+                type: type,
+                speed: speedKmh.toFixed(1)
+            });
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+        }
+
+        function renderHistory() {
+            const records = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+            if (records.length === 0) {
+                ui.historyList.innerHTML = '<p class="text-gray-500 text-sm text-center py-8">履歴はまだありません</p>';
+                return;
+            }
+
+            ui.historyList.innerHTML = records.map(r => {
+                const isRun = r.type === 'running';
+                const typeIcon = isRun ? 'zap' : 'footprints';
+                const typeColor = isRun ? 'bg-orange-100 text-orange-600' : 'bg-teal-100 text-teal-600';
+                const sideColor = isRun ? 'bg-orange-400' : 'bg-teal-400';
+
+                return `
+                <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col gap-2 relative overflow-hidden">
+                    <div class="absolute top-0 right-0 w-1.5 h-full ${sideColor}"></div>
+                    <div class="flex justify-between items-start border-b pb-2">
+                        <div class="flex flex-col">
+                            <span class="text-sm font-bold text-gray-700">${r.date}</span>
+                            <span class="text-[10px] text-gray-500 mt-0.5"><i data-lucide="clock" class="w-3 h-3 inline align-text-bottom mr-0.5"></i>${r.timeRange}</span>
+                        </div>
+                        <div class="flex flex-col items-end gap-1 pr-2">
+                            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 ${typeColor}">
+                                <i data-lucide="${typeIcon}" class="w-3 h-3"></i> ${isRun ? 'ランニング' : 'ウォーキング'}
+                            </span>
+                            ${r.pins > 0 ? `<span class="text-[10px] bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full"><i data-lucide="map-pin" class="w-3 h-3 inline"></i> ${r.pins}ヶ所</span>` : ''}
+                        </div>
+                    </div>
+                    <div class="grid grid-cols-4 gap-1 text-center pt-1">
+                        <div>
+                            <p class="text-[9px] text-gray-400">距離(km)</p>
+                            <p class="font-bold text-teal-700">${r.distance}</p>
+                        </div>
+                        <div class="border-l border-gray-100">
+                            <p class="text-[9px] text-gray-400">時間</p>
+                            <p class="font-bold text-teal-700">${r.duration}</p>
+                        </div>
+                        <div class="border-l border-gray-100">
+                            <p class="text-[9px] text-gray-400">歩数</p>
+                            <p class="font-bold text-teal-700">${(r.steps || 0).toLocaleString()}</p>
+                        </div>
+                        <div class="border-l border-gray-100">
+                            <p class="text-[9px] text-gray-400">カロリー</p>
+                            <p class="font-bold text-orange-500">${r.calories || 0} <span class="text-[9px] font-normal">kcal</span></p>
+                        </div>
+                    </div>
+                </div>`
+            }).join('');
+            lucide.createIcons();
+        }
+
+        // --- 設定・モーダル制御 ---
+        function checkProfile() {
+            const profile = getProfile();
+            if (!profile) {
+                ui.setupModal.style.display = 'flex';
+                document.querySelectorAll('.gender-btn').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        document.querySelectorAll('.gender-btn').forEach(b => {
+                            b.classList.remove('bg-teal-50', 'border-teal-500', 'text-teal-700');
+                            b.classList.add('bg-gray-50', 'border-gray-300', 'text-gray-600');
+                        });
+                        e.target.classList.add('bg-teal-50', 'border-teal-500', 'text-teal-700');
+                        document.getElementById('initGender').value = e.target.dataset.value;
+                    });
+                });
+            } else {
+                document.getElementById('settingGender').value = profile.gender || 'male';
+                document.getElementById('settingAge').value = profile.age || '30';
+                document.getElementById('settingHeight').value = profile.height || '';
+                document.getElementById('settingWeight').value = profile.weight || '';
+            }
+        }
+
+        function completeSetup() {
+            const gender = document.getElementById('initGender').value;
+            const age = document.getElementById('initAge').value;
+            const height = document.getElementById('initHeight').value;
+            const weight = document.getElementById('initWeight').value;
+            
+            if (!gender || !age) return alert('性別と年齢層は必須です。');
+            
+            const profile = { gender, age, height: height||null, weight: weight||null };
+            localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
+            ui.setupModal.style.display = 'none';
+            checkProfile(); // 設定画面に反映
+        }
+
+        function saveSettings() {
+            const p = {
+                gender: document.getElementById('settingGender').value,
+                age: document.getElementById('settingAge').value,
+                height: document.getElementById('settingHeight').value,
+                weight: document.getElementById('settingWeight').value
+            };
+            localStorage.setItem(PROFILE_KEY, JSON.stringify(p));
+            alert('設定を保存しました。');
+            updateDashboard(); // 現在の表示を再計算
+        }
+
+        // --- バックアップ ---
+        function exportData() {
+            const data = JSON.stringify({
+                history: JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'),
+                profile: getProfile()
+            });
+            const blob = new Blob([data], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const d = new Date();
+            a.download = `walklog_${d.getFullYear()}${(d.getMonth()+1).toString().padStart(2,'0')}${d.getDate().toString().padStart(2,'0')}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function importData(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const data = JSON.parse(event.target.result);
+                    if (data.history) localStorage.setItem(STORAGE_KEY, JSON.stringify(data.history));
+                    if (data.profile) localStorage.setItem(PROFILE_KEY, JSON.stringify(data.profile));
+                    alert('データを復元しました。');
+                    renderHistory();
+                    checkProfile();
+                } catch (err) { alert('ファイルの読み込みに失敗しました。'); }
+            };
+            reader.readAsText(file);
+        }
+
+        // --- タブ制御 ---
+        window.switchTab = function(tabName) {
+            ['recorder', 'history', 'settings'].forEach(name => {
+                document.getElementById(`view-${name}`).style.display = 'none';
+                document.getElementById(`tab-${name}`).classList.replace('text-teal-600', 'text-gray-400');
+            });
+            
+            const view = document.getElementById(`view-${tabName}`);
+            view.style.display = tabName === 'recorder' ? 'flex' : 'block';
+            document.getElementById(`tab-${tabName}`).classList.replace('text-gray-400', 'text-teal-600');
+            
+            if (tabName === 'recorder' && map) setTimeout(() => map.invalidateSize(), 100);
+        }
+
+        // --- 初期起動 ---
+        window.onload = () => {
+            initMap();
+            checkProfile();
+            renderHistory();
+            
+            if ("geolocation" in navigator) {
+                watchId = navigator.geolocation.watchPosition(
+                    (pos) => {
+                        ui.gpsDot.classList.replace('bg-red-400', 'bg-green-400');
+                        ui.gpsText.textContent = "GPS捕捉中";
+                        onPosUpdate(pos);
+                    },
+                    (err) => {
+                        ui.gpsDot.classList.replace('bg-green-400', 'bg-red-400');
+                        ui.gpsText.textContent = "GPSエラー";
+                    },
+                    { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 }
+                );
+            } else {
+                alert("GPS非対応のブラウザです。");
+            }
+        };
+    </script>
+</body>
+</html>
